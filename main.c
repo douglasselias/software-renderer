@@ -2,94 +2,14 @@
 #include "raymath.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include "src/window.c"
-
-void* mem_alloc(int size) {
-  return calloc(size, 1);
-}
-
-typedef struct { float x, y, z; } V3;
-typedef struct { V3 points[3]; } Triangle;
-typedef struct { Triangle* tris; int count; } _Mesh; // Underscore to avoid name collision with Raylib Mesh type
-typedef struct { float m[4][4]; } Matrix44;
-
-void multiply_matrix_vector(V3 input, V3* output, Matrix44 matrix) {
-  output->x = input.x * matrix.m[0][0] + input.y * matrix.m[1][0] + input.z * matrix.m[2][0] + matrix.m[3][0];
-  output->y = input.x * matrix.m[0][1] + input.y * matrix.m[1][1] + input.z * matrix.m[2][1] + matrix.m[3][1];
-  output->z = input.x * matrix.m[0][2] + input.y * matrix.m[1][2] + input.z * matrix.m[2][2] + matrix.m[3][2];
-  float w   = input.x * matrix.m[0][3] + input.y * matrix.m[1][3] + input.z * matrix.m[2][3] + matrix.m[3][3];
-
-  if(!FloatEquals(w, 0)) {
-    output->x /= w;
-    output->y /= w;
-    output->z /= w;
-  }
-}
-
-_Mesh load_obj(char* filename) {
-  char* obj_text = LoadFileText(filename);
-  char* copy_obj_text = strdup(obj_text);
-
-  int total_vertices = 0, total_faces = 0;
-
-  {
-    char* line = strtok(obj_text, "\n");
-    while(line != NULL) {
-      if(line[0] == 'v') total_vertices++;
-      if(line[0] == 'f') total_faces++;
-      line = strtok(NULL, "\n");
-    }
-  }
-
-  V3* vertices    = mem_alloc(sizeof(V3)       * total_vertices);
-  Triangle* faces = mem_alloc(sizeof(Triangle) * total_faces);
-  int vi = 0, fi = 0;
-
-  char* line = strtok(copy_obj_text, "\n");
-  while(line != NULL) {
-    if(line[0] == 'v') { 
-      char junk;
-      sscanf(line, "%c %f %f %f", &junk, &vertices[vi].x, &vertices[vi].y, &vertices[vi].z);
-      vi++;
-    }
-
-    if(line[0] == 'f') {
-      char junk;
-      int x, y, z;
-      sscanf(line, "%c %d %d %d", &junk, &x, &y, &z);
-      faces[fi].points[0] = vertices[x-1];
-      faces[fi].points[1] = vertices[y-1];
-      faces[fi].points[2] = vertices[z-1];
-      fi++;
-    }
-
-    line = strtok(NULL, "\n");
-  }
-
-  _Mesh mesh = {.count = total_faces, .tris = faces};
-  return mesh;
-}
-
-int sort_triangles(const void* tri_a, const void* tri_b) {
-  Triangle a = *(Triangle*)tri_a;
-  Triangle b = *(Triangle*)tri_b;
-
-  float avg_z1 = (a.points[0].z + a.points[1].z + a.points[2].z) / 3;
-  float avg_z2 = (b.points[0].z + b.points[1].z + b.points[2].z) / 3;
-  // return (avg_z2 - avg_z1) > 0 ? 1 : -1;  // Sort farthest to nearest
-  // if(avg_z1 > avg_z2) return -1;
-  // if(avg_z1 < avg_z2) return 1;
-
-  // float min_z1 = fminf(fminf(a.points[0].z, a.points[1].z), a.points[2].z);
-  // float min_z2 = fminf(fminf(b.points[0].z, b.points[1].z), b.points[2].z);
-  // if (min_z1 > min_z2) return -1;
-  // if (min_z1 < min_z2) return 1;
-
-  return 0;
-}
+#include "src/memory.c"
+#include "src/v3.c"
+#include "src/matrix.c"
+#include "src/triangle.c"
+#include "src/mesh.c"
 
 int main() {
   init_window();
@@ -98,76 +18,39 @@ int main() {
   float z_far = 1000.0f;
   float z_near = 0.1f;
   float aspect_ratio = window_height / (float)window_width;
-  float fov_rad = 1 / tanf(fov * 0.5f / 180.0f * 3.14159f);
-
-  Matrix44 projection = {0};
-  projection.m[0][0] = aspect_ratio * fov_rad;
-  projection.m[1][1] = fov_rad;
-  projection.m[2][2] = z_far / (z_far - z_near);
-  projection.m[3][2] = (-z_far * z_near) / (z_far - z_near);
-  projection.m[2][3] = 1;
-  projection.m[3][3] = 0;
-
-  float f_theta = 0;
+  Matrix44 projection = create_projection_matrix(fov, aspect_ratio, z_near, z_far);
 
   V3 camera = {0};
+  V3 look_dir = {0};
 
-  _Mesh ship = load_obj("../assets/ship.obj");
-
-  _Mesh cube = {};
-  cube.count = 12;
-  cube.tris = mem_alloc(sizeof(Triangle) * cube.count);
-  {
-    // SOUTH
-    cube.tris[0] = (Triangle){ 0.0f, 0.0f, 0.0f,    0.0f, 1.0f, 0.0f,    1.0f, 1.0f, 0.0f };
-    cube.tris[1] = (Triangle){ 0.0f, 0.0f, 0.0f,    1.0f, 1.0f, 0.0f,    1.0f, 0.0f, 0.0f };
-
-    // EAST
-    cube.tris[2] = (Triangle){ 1.0f, 0.0f, 0.0f,    1.0f, 1.0f, 0.0f,    1.0f, 1.0f, 1.0f };
-    cube.tris[3] = (Triangle){ 1.0f, 0.0f, 0.0f,    1.0f, 1.0f, 1.0f,    1.0f, 0.0f, 1.0f };
-
-    // NORTH
-    cube.tris[4] = (Triangle){ 1.0f, 0.0f, 1.0f,    1.0f, 1.0f, 1.0f,    0.0f, 1.0f, 1.0f };
-    cube.tris[5] = (Triangle){ 1.0f, 0.0f, 1.0f,    0.0f, 1.0f, 1.0f,    0.0f, 0.0f, 1.0f };
-
-    // WEST
-    cube.tris[6] = (Triangle){ 0.0f, 0.0f, 1.0f,    0.0f, 1.0f, 1.0f,    0.0f, 1.0f, 0.0f };
-    cube.tris[7] = (Triangle){ 0.0f, 0.0f, 1.0f,    0.0f, 1.0f, 0.0f,    0.0f, 0.0f, 0.0f };
-
-    // TOP
-    cube.tris[8] = (Triangle){ 0.0f, 1.0f, 0.0f,    0.0f, 1.0f, 1.0f,    1.0f, 1.0f, 1.0f };
-    cube.tris[9] = (Triangle){ 0.0f, 1.0f, 0.0f,    1.0f, 1.0f, 1.0f,    1.0f, 1.0f, 0.0f };
-
-    // BOTTOM
-    cube.tris[10] = (Triangle){ 1.0f, 0.0f, 1.0f,   0.0f, 0.0f, 1.0f,    0.0f, 0.0f, 0.0f };
-    cube.tris[11] = (Triangle){ 1.0f, 0.0f, 1.0f,   0.0f, 0.0f, 0.0f,    1.0f, 0.0f, 0.0f };
-  }
+  _Mesh ship = load_obj("../assets/axis.obj");
 
   Triangle* triangles_to_raster = mem_alloc(sizeof(Triangle) * ship.count);
   int raster_index = 0;
   Color* colors_to_raster = mem_alloc(sizeof(Color) * ship.count);
 
+  float f_theta = 0;
+
+  bool lines_enabled = false;
+
   while(!WindowShouldClose()) {
     float dt = GetFrameTime();
 
-    f_theta += dt;
+    if(IsKeyPressed(KEY_L)) lines_enabled = !lines_enabled;
 
-    Matrix44 rotation_z = {0};
-    Matrix44 rotation_x = {0};
-  
-    rotation_z.m[0][0] = cosf(f_theta);
-    rotation_z.m[0][1] = sinf(f_theta);
-    rotation_z.m[1][0] = -sinf(f_theta);
-    rotation_z.m[1][1] = cosf(f_theta);
-    rotation_z.m[2][2] = 1;
-    rotation_z.m[3][3] = 1;
-  
-    rotation_x.m[0][0] = 1;
-    rotation_x.m[1][1] = cosf(f_theta * 0.5f);
-    rotation_x.m[1][2] = sinf(f_theta * 0.5f);
-    rotation_x.m[2][1] = -sinf(f_theta * 0.5f);
-    rotation_x.m[2][2] = cosf(f_theta * 0.5f);
-    rotation_x.m[3][3] = 1;
+    Matrix44 rotation_z = create_rotation_z_matrix(f_theta);
+    Matrix44 rotation_x = create_rotation_x_matrix(f_theta);
+    Matrix44 translation_matrix = create_translation_matrix(0, 0, 0.5f);
+    Matrix44 world_matrix = matrix_identity(); // ?
+    world_matrix = matrix_mul(rotation_z, rotation_x);
+    world_matrix = matrix_mul(world_matrix, translation_matrix);
+
+    V3 up = {0,1,0};
+    look_dir = (V3){0,0,1};
+    V3 target = vector_add(camera, look_dir);
+
+    Matrix44 camera_matrix = matrix_point_at(camera, target, up);
+    Matrix44 view_matrix = matrix_quick_inverse(camera_matrix);
 
     BeginDrawing();
     ClearBackground(BLACK);
@@ -189,38 +72,23 @@ int main() {
       translated_triangle.points[1].z = tri_rot_zx.points[1].z + 8;
       translated_triangle.points[2].z = tri_rot_zx.points[2].z + 8;
 
-      V3 normal, line_a, line_b;
-      line_a.x = translated_triangle.points[1].x - translated_triangle.points[0].x;
-      line_a.y = translated_triangle.points[1].y - translated_triangle.points[0].y;
-      line_a.z = translated_triangle.points[1].z - translated_triangle.points[0].z;
+      V3 line_a = vector_sub(translated_triangle.points[1], translated_triangle.points[0]);
+      V3 line_b = vector_sub(translated_triangle.points[2], translated_triangle.points[0]);
 
-      line_b.x = translated_triangle.points[2].x - translated_triangle.points[0].x;
-      line_b.y = translated_triangle.points[2].y - translated_triangle.points[0].y;
-      line_b.z = translated_triangle.points[2].z - translated_triangle.points[0].z;
+      V3 normal = vector_cross(line_a, line_b);
 
-      normal.x = line_a.y * line_b.z - line_a.z * line_b.y;
-      normal.y = line_a.z * line_b.x - line_a.x * line_b.z;
-      normal.z = line_a.x * line_b.y - line_a.y * line_b.x;
+      float length = vector_length(normal);
+      normal = vector_div_scalar(normal, length);
 
-      float length = sqrtf(normal.x * normal.x + normal.y * normal.y + normal.z * normal.z);
-      normal.x /= length;
-      normal.y /= length;
-      normal.z /= length;
-
-      float dot = normal.x * (translated_triangle.points[0].x - camera.x) +
-                  normal.y * (translated_triangle.points[0].y - camera.y) +
-                  normal.z * (translated_triangle.points[0].z - camera.z);
+      V3 offset_point = vector_sub(translated_triangle.points[0], camera);
+      float dot = vector_dot(normal, offset_point);
 
       if(dot < 0) {
         V3 light_direction = {0, 0, -1};
-        float len = sqrtf(light_direction.x * light_direction.x + light_direction.y * light_direction.y + light_direction.z * light_direction.z);
-        light_direction.x /= len;
-        light_direction.y /= len;
-        light_direction.z /= len;
+        float len = vector_length(light_direction);
+        light_direction = vector_div_scalar(light_direction, len);
 
-        float dot_light = normal.x * light_direction.x +
-                          normal.y * light_direction.y +
-                          normal.z * light_direction.z;
+        float dot_light = vector_dot(normal, light_direction);
 
         Color shaded_color = Fade(RED, dot_light);
 
@@ -230,44 +98,31 @@ int main() {
         multiply_matrix_vector(translated_triangle.points[2], &projected_triangle.points[2], projection);
 
         // Scale
-        projected_triangle.points[0].x += 1; projected_triangle.points[0].y += 1;
-        projected_triangle.points[1].x += 1; projected_triangle.points[1].y += 1;
-        projected_triangle.points[2].x += 1; projected_triangle.points[2].y += 1;
+        V3 scale = {1, 1, 0};
+        projected_triangle.points[0] = vector_add(projected_triangle.points[0], scale);
+        projected_triangle.points[1] = vector_add(projected_triangle.points[1], scale);
+        projected_triangle.points[2] = vector_add(projected_triangle.points[2], scale);
 
-        projected_triangle.points[0].x *= 0.5f * window_width;
-        projected_triangle.points[0].y *= 0.5f * window_height;
-        projected_triangle.points[1].x *= 0.5f * window_width;
-        projected_triangle.points[1].y *= 0.5f * window_height;
-        projected_triangle.points[2].x *= 0.5f * window_width;
-        projected_triangle.points[2].y *= 0.5f * window_height;
+        V3 window_normalize = {0.5f * window_width, 0.5f * window_height, 1};
+        projected_triangle.points[0] = vector_mul(projected_triangle.points[0], window_normalize);
+        projected_triangle.points[1] = vector_mul(projected_triangle.points[1], window_normalize);
+        projected_triangle.points[2] = vector_mul(projected_triangle.points[2], window_normalize);
 
         triangles_to_raster[raster_index] = projected_triangle;
         colors_to_raster[raster_index] = shaded_color;
         raster_index++;
-
-        // V3 a = projected_triangle.points[0];
-        // V3 b = projected_triangle.points[1];
-        // V3 c = projected_triangle.points[2];
-
-        // DrawTriangle((Vector2){a.x, a.y}, (Vector2){b.x, b.y}, (Vector2){c.x, c.y}, shaded_color);
-
-        // DrawLine((int)a.x, (int)a.y, (int)b.x, (int)b.y, WHITE);
-        // DrawLine((int)b.x, (int)b.y, (int)c.x, (int)c.y, WHITE);
-        // DrawLine((int)c.x, (int)c.y, (int)a.x, (int)a.y, WHITE);
       }
     }
 
     qsort(triangles_to_raster, raster_index, sizeof(Triangle), sort_triangles);
 
     for(int i = 0; i < raster_index; i++) {
-      V3 a = triangles_to_raster[i].points[0];
-      V3 b = triangles_to_raster[i].points[1];
-      V3 c = triangles_to_raster[i].points[2];
-      DrawTriangle((Vector2){a.x, a.y}, (Vector2){b.x, b.y}, (Vector2){c.x, c.y}, colors_to_raster[i]);
+      draw_triangle(triangles_to_raster[i], colors_to_raster[i]);
+      if(lines_enabled) draw_triangle_lines(triangles_to_raster[i], WHITE);
     }
 
-    memset(triangles_to_raster, 0, sizeof(Triangle) * ship.count);
-    memset(colors_to_raster,    0, sizeof(Color)    * ship.count);
+    mem_reset(triangles_to_raster, sizeof(Triangle) * ship.count);
+    mem_reset(colors_to_raster,    sizeof(Color)    * ship.count);
     raster_index = 0;
 
     EndDrawing();
